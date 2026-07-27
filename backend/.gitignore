@@ -1,0 +1,36 @@
+# Environments
+venv/
+env/
+.env/
+.venv/
+
+# Security (NEVER commit your secret keys or database passwords!)
+.env
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Data files (Crucial for Phase 1 - prevents uploading massive NEPSE data)
+*.csv
+*.json
+*.xlsx
+*.db
+*.sqlite3
+
+# Logs and databases
+logs
+*.log
+
+# Pytest / Coverage
+.pytest_cache/
+htmlcov/
+.coverage
+.tox/
+coverage.xml
+
+# IDE / OS specifics
+.vscode/
+.idea/
+.DS_Store
