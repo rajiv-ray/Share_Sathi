@@ -1,14 +1,14 @@
-// frontend/src/pages/Dashboard.tsx
 import toast from 'react-hot-toast';
 import { useState, useEffect, type FormEvent } from 'react';
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 import { 
   AlertTriangle, CheckCircle2, Plus, 
-  Wallet, Activity, Loader2, X 
+  Wallet, Activity, Loader2, X, Zap, Edit2, TrendingUp, LineChart 
 } from 'lucide-react';
-import api from '../services/api';
+import api, { portfolioApi } from '../services/api';
+import { MeroShareSyncModal } from '../components/MeroShareSyncModal';
 
-// --- TypeScript Interfaces matching your Python Schemas ---
+// --- TypeScript Interfaces ---
 interface SectorAllocation {
   sector: string;
   percentage: number;
@@ -18,6 +18,9 @@ interface SectorAllocation {
 interface PortfolioHealth {
   health_score: number;
   total_invested: number;
+  current_value: number;
+  total_profit: number;
+  profit_percentage: number;
   allocations: SectorAllocation[];
   warnings: string[];
   recommendations: string[];
@@ -32,22 +35,28 @@ interface Transaction {
   transaction_date: string;
 }
 
-// Chart Colors
 const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#64748b'];
 
 export default function Dashboard() {
   const [health, setHealth] = useState<PortfolioHealth | null>(null);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  
+  // Modal States
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isSyncModalOpen, setIsSyncModalOpen] = useState(false);
+  const [editingTx, setEditingTx] = useState<Transaction | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Form State
+  // Add Trade Form State
   const [symbol, setSymbol] = useState('');
   const [type, setType] = useState<'BUY' | 'SELL'>('BUY');
   const [quantity, setQuantity] = useState('');
   const [price, setPrice] = useState('');
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
+
+  // Edit Price State
+  const [editPrice, setEditPrice] = useState('');
 
   const fetchDashboardData = async () => {
     try {
@@ -69,10 +78,8 @@ export default function Dashboard() {
   }, []);
 
   const handleAddTrade = async (e: FormEvent) => {
-    e.preventDefault();;
+    e.preventDefault();
     setIsSubmitting(true);
-
-    // Give the user an immediate loading toast
     const toastId = toast.loading('Logging transaction...');
 
     try {
@@ -87,16 +94,39 @@ export default function Dashboard() {
       setIsModalOpen(false);
       setSymbol(''); setQuantity(''); setPrice('');
       fetchDashboardData();
-      
-      // Update the loading toast to a success checkmark
       toast.success('Trade logged successfully!', { id: toastId });
     } catch (err: any) {
-      // Update the loading toast to an error message
       const errorMsg = err.response?.data?.detail || 'Failed to add transaction.';
       toast.error(errorMsg, { id: toastId });
     } finally {
       setIsSubmitting(false);
     }
+  };
+
+  const handleEditPrice = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!editingTx) return;
+
+    setIsSubmitting(true);
+    const toastId = toast.loading('Updating WACC/Price...');
+
+    try {
+      await portfolioApi.updateTransactionPrice(editingTx.id, { price: parseFloat(editPrice) });
+      setEditingTx(null);
+      setEditPrice('');
+      fetchDashboardData();
+      toast.success('Price updated successfully!', { id: toastId });
+    } catch (err: any) {
+      const errorMsg = err.response?.data?.detail || 'Failed to update price.';
+      toast.error(errorMsg, { id: toastId });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const openEditModal = (tx: Transaction) => {
+    setEditingTx(tx);
+    setEditPrice(tx.price.toString());
   };
 
   if (isLoading) {
@@ -112,6 +142,8 @@ export default function Dashboard() {
     (health?.health_score || 0) >= 80 ? 'text-emerald-500' : 
     (health?.health_score || 0) >= 50 ? 'text-amber-500' : 'text-red-500';
 
+  const profitColor = (health?.total_profit || 0) >= 0 ? 'text-emerald-500' : 'text-rose-500';
+
   return (
     <div className="min-h-screen px-4 py-8 bg-gray-50 sm:px-6 lg:px-8">
       <div className="mx-auto max-w-7xl">
@@ -122,42 +154,77 @@ export default function Dashboard() {
             <h1 className="text-3xl font-bold text-gray-900">Portfolio Dashboard</h1>
             <p className="mt-1 text-sm text-gray-500">Real-time diversification & health analysis</p>
           </div>
-          <button 
-            onClick={() => setIsModalOpen(true)}
-            className="flex items-center px-4 py-2 mt-4 text-sm font-medium text-white transition-colors bg-blue-600 rounded-lg sm:mt-0 hover:bg-blue-700"
-          >
-            <Plus className="w-4 h-4 mr-2" />
-            Add Trade
-          </button>
+          <div className="flex items-center gap-3 mt-4 sm:mt-0">
+            <button
+              onClick={() => setIsSyncModalOpen(true)}
+              className="flex items-center gap-2 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white px-4 py-2 rounded-lg font-medium text-sm transition-all shadow-sm"
+            >
+              <Zap className="w-4 h-4" />
+              Sync MeroShare
+            </button>
+            <button 
+              onClick={() => setIsModalOpen(true)}
+              className="flex items-center px-4 py-2 text-sm font-medium text-white transition-colors bg-blue-600 rounded-lg hover:bg-blue-700 shadow-sm"
+            >
+              <Plus className="w-4 h-4 mr-2" />
+              Add Trade
+            </button>
+          </div>
         </div>
 
-        {/* Top KPIs */}
-        <div className="grid grid-cols-1 gap-6 mb-8 lg:grid-cols-2">
+        {/* Top KPIs - Now a 4-Column Grid */}
+        <div className="grid grid-cols-1 gap-6 mb-8 md:grid-cols-2 xl:grid-cols-4">
           
           {/* Total Invested Card */}
           <div className="p-6 bg-white border border-gray-100 shadow-sm rounded-2xl">
             <div className="flex items-center mb-4 text-gray-500">
               <Wallet className="w-5 h-5 mr-2 text-blue-500" />
-              <h2 className="font-semibold">Total Invested Capital</h2>
+              <h2 className="font-semibold text-sm">Total Invested</h2>
             </div>
-            <p className="text-4xl font-bold text-gray-900">
+            <p className="text-2xl font-bold text-gray-900">
               Rs. {health?.total_invested.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             </p>
           </div>
 
-          {/* Health Score Card */}
+          {/* Current Value Card */}
           <div className="p-6 bg-white border border-gray-100 shadow-sm rounded-2xl">
+            <div className="flex items-center mb-4 text-gray-500">
+              <TrendingUp className="w-5 h-5 mr-2 text-purple-500" />
+              <h2 className="font-semibold text-sm">Current Value</h2>
+            </div>
+            <p className="text-2xl font-bold text-gray-900">
+              Rs. {health?.current_value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            </p>
+          </div>
+
+          {/* Profit / Loss Card */}
+          <div className="p-6 bg-white border border-gray-100 shadow-sm rounded-2xl">
+            <div className="flex items-center mb-4 text-gray-500">
+              <LineChart className="w-5 h-5 mr-2 text-gray-500" />
+              <h2 className="font-semibold text-sm">Overall P/L</h2>
+            </div>
+            <div className="flex items-end gap-2">
+              <p className={`text-2xl font-bold ${profitColor}`}>
+                {(health?.total_profit || 0) >= 0 ? '+' : ''}Rs. {health?.total_profit.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </p>
+              <span className={`text-sm font-semibold mb-1 ${profitColor}`}>
+                ({(health?.profit_percentage || 0) >= 0 ? '+' : ''}{health?.profit_percentage.toFixed(2)}%)
+              </span>
+            </div>
+          </div>
+
+          {/* Health Score Card */}
+          <div className="p-6 bg-white border border-gray-100 shadow-sm rounded-2xl flex flex-col justify-center">
             <div className="flex items-center justify-between mb-2 text-gray-500">
               <div className="flex items-center">
                 <Activity className={`w-5 h-5 mr-2 ${scoreColor}`} />
-                <h2 className="font-semibold">Diversification Score</h2>
+                <h2 className="font-semibold text-sm">Health Score</h2>
               </div>
-              <span className={`text-3xl font-bold ${scoreColor}`}>
-                {health?.health_score} / 100
-              </span>
             </div>
-            {/* Visual Progress Bar */}
-            <div className="w-full h-3 mt-4 bg-gray-100 rounded-full overflow-hidden">
+            <span className={`text-2xl font-bold ${scoreColor}`}>
+              {health?.health_score} / 100
+            </span>
+            <div className="w-full h-2 mt-3 bg-gray-100 rounded-full overflow-hidden">
               <div 
                 className={`h-full transition-all duration-1000 ${
                   (health?.health_score || 0) >= 80 ? 'bg-emerald-500' : 
@@ -259,12 +326,13 @@ export default function Dashboard() {
                   <th className="px-6 py-4 text-right">Quantity</th>
                   <th className="px-6 py-4 text-right">Price</th>
                   <th className="px-6 py-4 text-right">Total Value</th>
+                  <th className="px-6 py-4 text-center">Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {transactions.length === 0 ? (
                   <tr>
-                    <td colSpan={6} className="px-6 py-8 text-center text-gray-400">No transactions recorded yet.</td>
+                    <td colSpan={7} className="px-6 py-8 text-center text-gray-400">No transactions recorded yet.</td>
                   </tr>
                 ) : (
                   transactions.slice().reverse().map((tx) => (
@@ -283,6 +351,15 @@ export default function Dashboard() {
                       <td className="px-6 py-4 font-medium text-right text-gray-900">
                         Rs. {(tx.quantity * tx.price).toLocaleString(undefined, { minimumFractionDigits: 2 })}
                       </td>
+                      <td className="px-6 py-4 text-center">
+                        <button 
+                          onClick={() => openEditModal(tx)}
+                          className="p-1 text-gray-400 transition-colors rounded hover:text-blue-600 hover:bg-blue-50"
+                          title="Edit Purchase Price (WACC)"
+                        >
+                          <Edit2 className="w-4 h-4" />
+                        </button>
+                      </td>
                     </tr>
                   ))
                 )}
@@ -292,6 +369,49 @@ export default function Dashboard() {
         </div>
 
       </div>
+
+      {/* --- MeroShare Sync Modal --- */}
+      <MeroShareSyncModal
+        isOpen={isSyncModalOpen}
+        onClose={() => setIsSyncModalOpen(false)}
+        onSuccess={() => {
+          toast.success('Portfolio synced with MeroShare!');
+          fetchDashboardData();
+        }}
+      />
+
+      {/* --- EDIT PRICE / WACC MODAL --- */}
+      {editingTx && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
+          <div className="w-full max-w-sm p-6 bg-white shadow-2xl rounded-2xl">
+            <div className="flex items-center justify-between mb-5">
+              <h3 className="text-xl font-bold text-gray-900">Edit WACC / Price</h3>
+              <button onClick={() => setEditingTx(null)} className="p-1 text-gray-400 hover:text-gray-600 rounded-full hover:bg-gray-100">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <p className="mb-4 text-sm text-gray-500">
+              Update the purchase price for <strong>{editingTx.quantity}</strong> shares of <strong>{editingTx.stock_symbol}</strong>.
+            </p>
+            <form onSubmit={handleEditPrice} className="space-y-4">
+              <div>
+                <label className="block mb-1 text-sm font-medium text-gray-700">Cost per Share (Rs.)</label>
+                <input 
+                  type="number" required min="0.01" step="0.01" 
+                  value={editPrice} onChange={(e) => setEditPrice(e.target.value)}
+                  className="w-full py-2.5 px-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-600 outline-none"
+                />
+              </div>
+              <button 
+                type="submit" disabled={isSubmitting}
+                className="flex items-center justify-center w-full px-4 py-2.5 mt-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:bg-blue-400"
+              >
+                {isSubmitting ? <Loader2 className="w-5 h-5 animate-spin" /> : 'Save Price'}
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* --- ADD TRADE MODAL --- */}
       {isModalOpen && (
@@ -303,7 +423,6 @@ export default function Dashboard() {
                 <X className="w-5 h-5" />
               </button>
             </div>
-
 
             <form onSubmit={handleAddTrade} className="space-y-4">
               <div className="grid grid-cols-2 gap-4">

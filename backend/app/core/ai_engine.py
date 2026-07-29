@@ -1,10 +1,8 @@
-# backend/app/core/ai_engine.py
 import json
 import logging
 import os
 
 from dotenv import load_dotenv
-# Use the new SDK imports
 from google import genai
 from google.genai import types
 
@@ -17,17 +15,13 @@ VALID_SENTIMENTS = {"POSITIVE", "NEUTRAL", "NEGATIVE"}
 # Configure the SDK using your secret API Key stored safely in the .env file
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-# Initialize the new Client
+# Initialize the Client once at boot
 ai_client = None
 if GEMINI_API_KEY:
-    # We initialize the client once at boot. 
     ai_client = genai.Client(api_key=GEMINI_API_KEY)
 
 
 def _fallback_response(reason: str) -> dict:
-    # Details go to the server log, not the client - the previous
-    # "unconfigured" fallback put the exact missing env var name in the
-    # response body, which is more than an end user needs to see.
     logger.warning("analyze_financial_news falling back: %s", reason)
     return {
         "sentiment": "NEUTRAL",
@@ -46,7 +40,6 @@ def analyze_financial_news(news_content: str) -> dict:
     if not ai_client:
         return _fallback_response("GEMINI_API_KEY is not configured or client failed to initialize")
 
-    # Define a strict system instruction to turn Gemini into a financial data tool
     system_prompt = (
         "You are an expert financial analyst focusing on the Nepal Stock Exchange (NEPSE). "
         "Analyze the provided financial news text. You must respond ONLY with a raw JSON object. "
@@ -60,35 +53,23 @@ def analyze_financial_news(news_content: str) -> dict:
     )
 
     try:
-        # Combine instructions and content
         full_content = f"{system_prompt}\n\nNews Content to analyze:\n{news_content}"
 
-        # In the new SDK, generation config rules (like JSON enforcement) go into a types object
         config = types.GenerateContentConfig(
             response_mime_type="application/json",
         )
 
-        # Generate the content using the new client structure
         response = ai_client.models.generate_content(
             model="gemini-3.6-flash",
             contents=full_content,
             config=config,
         )
 
-        # Parse text into a structured Python dictionary
         parsed_data = json.loads(response.text.strip())
 
         if not isinstance(parsed_data, dict):
             raise ValueError(f"Expected a JSON object, got {type(parsed_data).__name__}")
 
-        # Guardrails: normalize the model's output to exactly what
-        # NewsAnalysisResponse (and its SentimentEnum) expects, rather than
-        # trusting the LLM to follow the prompt precisely every time. If
-        # sentiment/summary come back malformed, FastAPI's response
-        # validation rejects the response with an unhandled 500 - and by
-        # then this function has already returned, so the caller's
-        # try/except in analytics.py can't catch it. Better to never let a
-        # bad shape leave this function in the first place.
         sentiment = str(parsed_data.get("sentiment", "")).upper().strip()
         if sentiment not in VALID_SENTIMENTS:
             logger.warning("Gemini returned an unrecognized sentiment: %r", parsed_data.get("sentiment"))
@@ -99,7 +80,6 @@ def analyze_financial_news(news_content: str) -> dict:
             summary = []
         summary = [str(item) for item in summary if isinstance(item, (str, int, float))]
 
-        # Force exactly 3 array items if the model shortchanged or over-indexed the list
         while len(summary) < 3:
             summary.append("No additional summary data provided by analyzer.")
         summary = summary[:3]
@@ -107,5 +87,88 @@ def analyze_financial_news(news_content: str) -> dict:
         return {"sentiment": sentiment, "summary": summary}
 
     except Exception as e:
-        # Graceful fallback so a broken network request or bad parsing step doesn't blow up your backend
         return _fallback_response(str(e))
+
+
+def generate_portfolio_advice(portfolio_summary: str) -> str:
+    """
+    Sends the user's synced portfolio state to Gemini 3.6 Flash for personalized advice.
+    """
+    if not ai_client:
+        logger.warning("generate_portfolio_advice falling back: GEMINI_API_KEY is not configured")
+        return "AI advisory is currently unavailable due to missing API keys or client setup."
+
+    prompt = f"""
+You are an elite financial advisor specializing in the Nepal Stock Exchange (NEPSE).
+Your client has provided their current portfolio summary, including their 
+Average Purchase Price (WACC), Current Market Price (LTP), and Profit/Loss.
+
+Portfolio Data:
+{portfolio_summary}
+
+Please provide a concise, highly actionable analysis. Include:
+1. A brief overview of their current performance.
+2. Specific risks they are facing (e.g., sector concentration, heavy losses in specific stocks).
+3. Actionable next steps (e.g., averaging down, taking profits, holding).
+
+Keep your tone professional, encouraging, and direct. Format with clear headings and bullet points.
+"""
+
+    try:
+        response = ai_client.models.generate_content(
+            model="gemini-3.6-flash",
+            contents=prompt,
+        )
+        return response.text.strip()
+    except Exception as e:
+        logger.error(f"Gemini API error during portfolio analysis: {e}")
+        return "Sorry, I am experiencing high traffic right now and couldn't analyze your portfolio. Please try again later."
+
+
+def generate_ml_forecast_explanation(symbol: str, prediction: str, indicators: dict) -> str:
+    """
+    Asks Gemini to explain the Random Forest model's prediction in plain English.
+    """
+    if not ai_client:
+        return f"The Machine Learning model forecasts a movement {prediction}, but the AI explainer is offline."
+
+    prompt = f"""
+    You are a technical analyst for NEPSE. Our Random Forest ML model just analyzed 
+    the stock '{symbol}' and predicted the next trend will be: {prediction}.
+    
+    Here are the latest key indicators from the ML model:
+    - RSI (14): {indicators.get('RSI_14', 0):.2f}
+    - MACD: {indicators.get('MACD', 0):.2f}
+    - Current Price: Rs {indicators.get('Close', 0):.2f}
+    
+    Write a short (3-4 sentences), punchy explanation for a retail investor about WHY the 
+    model likely predicted '{prediction}' based on these indicators. Validate the ML model's choice.
+    """
+    try:
+        response = ai_client.models.generate_content(model="gemini-3.6-flash", contents=prompt)
+        return response.text.strip()
+    except Exception:
+        return f"The ML model predicts the stock will go {prediction} based on current structural patterns."
+
+
+def generate_low_confidence_forecast(symbol: str) -> str:
+    """
+    Fallback for when a stock is NOT in the 100-company CSV database.
+    """
+    if not ai_client:
+        return "Symbol not found in ML database, and AI fallback is offline."
+
+    prompt = f"""
+    A user requested a trend forecast for the NEPSE stock '{symbol}'. 
+    This stock is NOT in our top-100 historical database, so we cannot run it through our ML model.
+    
+    Write a brief, highly cautionary 3-sentence response. 
+    1. Acknowledge the stock.
+    2. Explicitly state: "Because this stock is not in our 100-company historical database, this is a low-confidence projection."
+    3. Provide whatever general recent context you know about this company or sector.
+    """
+    try:
+        response = ai_client.models.generate_content(model="gemini-3.6-flash", contents=prompt)
+        return response.text.strip()
+    except Exception:
+        return "This symbol is missing from our ML dataset. Insufficient data to generate a forecast."

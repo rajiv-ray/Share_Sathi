@@ -1,3 +1,4 @@
+// frontend/src/services/api.ts
 import axios, { type InternalAxiosRequestConfig, type AxiosResponse, type AxiosError } from 'axios';
 
 // 1. Create a centralized Axios instance pointing to your FastAPI backend
@@ -24,17 +25,80 @@ api.interceptors.request.use(
 );
 
 // 3. Add a response interceptor to handle expired tokens globally
+
+// frontend/src/services/api.ts
 api.interceptors.response.use(
   (response: AxiosResponse) => response,
   (error: AxiosError) => {
-    // If the backend rejects a token (e.g., 401 Unauthorized), log the user out
-    if (error.response && error.response.status === 401) {
+    const requestUrl = error.config?.url || '';
+    
+    // Only logout and redirect if a 401 comes from Share Sathi's own endpoints, NOT MeroShare
+    if (error.response && error.response.status === 401 && !requestUrl.includes('/meroshare/')) {
       localStorage.removeItem('access_token');
-      // Forcefully redirect the user back to the login page
       window.location.href = '/login';
     }
+    
     return Promise.reject(error);
   }
 );
+
+// ==========================================
+// MeroShare Automation Interfaces & API
+// ==========================================
+
+export interface MeroShareCredentials {
+  dp_id: string;
+  username: string;
+  password: string;
+}
+
+export interface DPOption {
+  id: string;
+  code: string;
+  name: string;
+}
+
+export interface MeroShareSyncResponse {
+  message: string;
+  total_scripts_synced: number;
+}
+
+export interface TransactionUpdate {
+  price: number;
+}
+
+export const meroshareApi = {
+  /**
+   * Fetches the list of all Depository Participants (DPs) 
+   * to populate the dropdown menu in the frontend.
+   */
+  getCapitals: async (): Promise<DPOption[]> => {
+    const response = await api.get('/meroshare/capitals');
+    return response.data;
+  },
+
+  /**
+   * Sends the user's MeroShare credentials to the backend 
+   * to automate the fetching and saving of portfolio holdings.
+   */
+  syncPortfolio: async (credentials: MeroShareCredentials): Promise<MeroShareSyncResponse> => {
+    const response = await api.post('/meroshare/sync', credentials);
+    return response.data;
+  },
+};
+
+export const portfolioApi = {
+  updateTransactionPrice: async (id: number, data: TransactionUpdate) => {
+    const response = await api.put(`/portfolio/${id}`, data);
+    return response.data;
+  }
+};
+
+export const analyticsApi = {
+  getPortfolioAdvice: async (): Promise<{ advice: string }> => {
+    const response = await api.get('/analytics/portfolio-advice');
+    return response.data;
+  }
+};
 
 export default api;

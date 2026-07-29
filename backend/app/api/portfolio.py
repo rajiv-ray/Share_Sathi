@@ -1,4 +1,3 @@
-# backend/app/api/portfolio.py
 from typing import List
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import func
@@ -7,6 +6,7 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.security import get_current_user
 from app.core.sector_resolver import sector_resolver
+from app.core.nepse_fetcher import get_live_prices
 from app.models.user import User
 from app.models.portfolio import Transaction
 from app.schemas.portfolio_schema import (
@@ -15,6 +15,7 @@ from app.schemas.portfolio_schema import (
     TransactionTypeEnum,
     PortfolioHealthResponse,
     SectorAllocation,
+    TransactionUpdate
 )
 
 router = APIRouter()
@@ -99,19 +100,36 @@ def get_user_transactions(
         .all()
     )
 
+@router.put("/{transaction_id}")
+def update_transaction_price(
+    transaction_id: int, 
+    tx_update: TransactionUpdate, 
+    db: Session = Depends(get_db), 
+    current_user: User = Depends(get_current_user)
+):
+    """Updates the execution price/WACC of a specific transaction."""
+    tx = db.query(Transaction).filter(
+        Transaction.id == transaction_id, 
+        Transaction.user_id == current_user.id
+    ).first()
+    
+    if not tx:
+        raise HTTPException(status_code=404, detail="Transaction not found.")
+        
+    tx.price = tx_update.price
+    db.commit()
+    
+    return {"message": "Transaction price updated successfully."}
 
 @router.get("/health", response_model=PortfolioHealthResponse)
-def get_portfolio_health(
+async def get_portfolio_health(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     """
-    Analyzes the user's current holdings and calculates a dynamic diversification health score.
+    Analyzes the user's current holdings and calculates a dynamic diversification health score
+    along with real-time P/L metrics based on live NEPSE data.
     """
-    # 1. Fetch all transactions for the user, in the order they actually
-    #    happened. This ordering isn't cosmetic: the average-cost-basis math
-    #    below replays history in sequence, and an out-of-order SELL would
-    #    silently corrupt the running "invested" total for that symbol.
     transactions = (
         db.query(Transaction)
         .filter(Transaction.user_id == current_user.id)
@@ -123,17 +141,15 @@ def get_portfolio_health(
         return PortfolioHealthResponse(
             health_score=0,
             total_invested=0.0,
+            current_value=0.0,
+            total_profit=0.0,
+            profit_percentage=0.0,
             allocations=[],
             warnings=["Your portfolio is empty."],
             recommendations=["Start by logging your first BUY transaction."]
         )
 
-    # 2. Calculate Net Holdings (Shares Owned & Total Invested Capital) using
-    #    an average-cost-basis model: a SELL removes shares at what you paid
-    #    for them on average, not at what you sold them for. Using the sale
-    #    price here would make "invested capital" swing based on whether you
-    #    sold at a gain or a loss, which has nothing to do with how much of
-    #    your money is still tied up in that position.
+    # 2. Calculate Net Holdings (Shares Owned & Total Invested Capital)
     holdings = {}
     for tx in transactions:
         sym = tx.stock_symbol
@@ -144,9 +160,6 @@ def get_portfolio_health(
             pos["invested"] += (tx.quantity * tx.price)
 
         elif tx.transaction_type == TransactionTypeEnum.SELL:
-            # Clamp instead of going negative. create_transaction() blocks
-            # new oversells, but this stays defensive for rows written
-            # before that check existed, or backdated around it.
             sell_qty = min(tx.quantity, pos["shares"])
 
             if pos["shares"] > 0:
@@ -158,7 +171,7 @@ def get_portfolio_health(
                 pos["shares"] = 0
                 pos["invested"] = 0.0
 
-    # 3. Map to Sectors Dynamically and Calculate Allocations
+    # 3. Map to Sectors Dynamically and Calculate Base Allocations
     sector_totals = {}
     grand_total_invested = 0.0
 
@@ -168,17 +181,41 @@ def get_portfolio_health(
             sector_totals[sector] = sector_totals.get(sector, 0.0) + data["invested"]
             grand_total_invested += data["invested"]
 
-    # 4. Generate Percentages & The Health Math
+    if grand_total_invested == 0:
+        return PortfolioHealthResponse(
+            health_score=0, 
+            total_invested=0.0, 
+            current_value=0.0,
+            total_profit=0.0,
+            profit_percentage=0.0,
+            allocations=[],
+            warnings=["No active investments found."], 
+            recommendations=["Buy some stocks."]
+        )
+
+    # 4. Fetch Live Prices and Calculate P/L
+    live_prices = await get_live_prices()
+    current_value = 0.0
+    
+    for sym, data in holdings.items():
+        qty = data["shares"]
+        if qty > 0:
+            ltp = live_prices.get(sym, 0.0)
+            if ltp > 0:
+                current_value += (qty * ltp)
+            else:
+                # Failsafe: If NEPSE API is down or misses an unlisted IPO,
+                # fallback to assuming it hasn't gained or lost value.
+                current_value += data["invested"]
+
+    total_profit = current_value - grand_total_invested
+    profit_percentage = (total_profit / grand_total_invested * 100) if grand_total_invested > 0 else 0.0
+
+    # 5. Generate Percentages & The Health Math
     allocations = []
     health_score = 100
     warnings = []
     recommendations = []
-
-    if grand_total_invested == 0:
-        return PortfolioHealthResponse(
-            health_score=0, total_invested=0.0, allocations=[],
-            warnings=["No active investments found."], recommendations=["Buy some stocks."]
-        )
 
     # Check for Sector Concentration Risk
     for sector, val in sector_totals.items():
@@ -192,7 +229,7 @@ def get_portfolio_health(
             warnings.append(f"High risk detected: {round(pct, 1)}% of your money is concentrated in {sector}.")
             recommendations.append(f"Consider buying stocks outside of {sector} to balance your risk.")
 
-    # 5. Finalize Score & Edge Cases
+    # 6. Finalize Score & Edge Cases
     health_score = max(10, min(100, health_score))  # Keep score strictly between 10 and 100
 
     if health_score >= 90:
@@ -207,6 +244,9 @@ def get_portfolio_health(
     return PortfolioHealthResponse(
         health_score=health_score,
         total_invested=round(grand_total_invested, 2),
+        current_value=round(current_value, 2),
+        total_profit=round(total_profit, 2),
+        profit_percentage=round(profit_percentage, 2),
         allocations=allocations,
         warnings=warnings,
         recommendations=recommendations

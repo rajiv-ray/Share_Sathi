@@ -57,6 +57,12 @@ class SectorAllocation(BaseModel):
 class PortfolioHealthResponse(BaseModel):
     health_score: int
     total_invested: float
+    current_value: float
+    total_profit: float
+    profit_percentage: float
     allocations: List[SectorAllocation]
     warnings: List[str]
     recommendations: List[str]
+
+class TransactionUpdate(BaseModel):
+    price: float
