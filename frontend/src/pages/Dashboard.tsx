@@ -179,7 +179,7 @@ export default function Dashboard() {
           <div className="p-6 bg-white border border-gray-100 shadow-sm rounded-2xl">
             <div className="flex items-center mb-4 text-gray-500">
               <Wallet className="w-5 h-5 mr-2 text-blue-500" />
-              <h2 className="font-semibold text-sm">Total Invested</h2>
+              <h2 className="font-semibold text-sm">Last Traded Price</h2>
             </div>
             <p className="text-2xl font-bold text-gray-900">
               Rs. {health?.total_invested.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
