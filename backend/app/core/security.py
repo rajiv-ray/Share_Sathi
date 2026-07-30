@@ -1,8 +1,8 @@
-# backend/app/core/security.py
 import os
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
+from cryptography.fernet import Fernet
 from dotenv import load_dotenv
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
@@ -31,8 +31,28 @@ if not SECRET_KEY:
         "before starting the server (openssl rand -hex 32 to generate one)."
     )
 
+# MeroShare Credentials Encryption Configuration
+ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY")
+if not ENCRYPTION_KEY:
+    raise RuntimeError(
+        "ENCRYPTION_KEY environment variable is not set. Add it to your .env file. "
+        "Generate one by running: python -c \"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\""
+    )
+
+cipher_suite = Fernet(ENCRYPTION_KEY)
+
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # Token lasts for 7 days
+
+
+def encrypt_password(password: str) -> str:
+    """Encrypts a plaintext password using symmetric AES encryption."""
+    return cipher_suite.encrypt(password.encode()).decode()
+
+
+def decrypt_password(encrypted_password: str) -> str:
+    """Decrypts an encrypted password back to plaintext."""
+    return cipher_suite.decrypt(encrypted_password.encode()).decode()
 
 
 def verify_password(plain_password, hashed_password):
