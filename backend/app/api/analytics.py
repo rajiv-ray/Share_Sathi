@@ -1,3 +1,4 @@
+# backend/app/api/analytics.py
 import logging
 import os
 import joblib
@@ -77,13 +78,18 @@ class StockForecastResponse(BaseModel):
     prediction: str
     confidence: str
     advice: str
+    current_price: float  # Added this field so the frontend can display it
     historical_data: list
 
 
 @router.get("/analyze-stock/{symbol}", response_model=StockForecastResponse)
-def analyze_stock(symbol: str, current_user: User = Depends(get_current_user)):
+async def analyze_stock(symbol: str, current_user: User = Depends(get_current_user)):
     symbol = symbol.upper().strip()
     csv_path = os.path.join(BASE_DIR, "raw_data", "nepse_100", f"{symbol}.csv")
+    
+    # 1. Accurately fetch the live price using your existing NEPSE fetcher
+    live_prices = await get_live_prices()
+    current_price = live_prices.get(symbol, 0.0)
     
     if not os.path.exists(csv_path):
         advice = generate_low_confidence_forecast(symbol)
@@ -92,6 +98,7 @@ def analyze_stock(symbol: str, current_user: User = Depends(get_current_user)):
             prediction="UNKNOWN",
             confidence="LOW (AI Only)",
             advice=advice,
+            current_price=current_price,
             historical_data=[]
         )
 
@@ -162,8 +169,11 @@ def analyze_stock(symbol: str, current_user: User = Depends(get_current_user)):
         indicators_dict = {
             "RSI_14": latest['Rsi_14'],
             "MACD": latest['Macd'],
-            "Close": latest['Close']
+            "Close": latest['Close'],
+            "Live_Price": current_price # Passing this so Gemini has context!
         }
+        
+        # 2. Gemini generates the text explanation using the technicals AND the live price
         advice = generate_ml_forecast_explanation(symbol, prediction, indicators_dict)
         chart_data = df.tail(250)[['Date', 'Close']].rename(columns={'Date': 'date', 'Close': 'close'}).to_dict('records')
 
@@ -172,6 +182,7 @@ def analyze_stock(symbol: str, current_user: User = Depends(get_current_user)):
             prediction=prediction,
             confidence="HIGH (ML + AI)",
             advice=advice,
+            current_price=current_price,
             historical_data=chart_data
         )
 
