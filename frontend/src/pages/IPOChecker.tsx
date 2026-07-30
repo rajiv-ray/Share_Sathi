@@ -65,16 +65,24 @@ export default function IPOChecker() {
     localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(updated));
   };
 
-  // Add new family BOID
+  // Add new family BOID with strict validation
   const handleAddBoid = (e: FormEvent) => {
     e.preventDefault();
     const cleanBoid = newBoid.replace(/\D/g, '');
 
+    // Validation Rule 1: Must be exactly 16 digits
     if (cleanBoid.length !== 16) {
-      toast.error('BOID must be exactly 16 digits.');
+      toast.error('Invalid BOID: Must be exactly 16 digits long.');
       return;
     }
 
+    // Validation Rule 2: Nepalese BOIDs always start with "130"
+    if (!cleanBoid.startsWith('130')) {
+      toast.error('Invalid BOID: Please enter a valid BOID.');
+      return;
+    }
+
+    // Validation Rule 3: Check for duplicates
     if (boidList.some((item) => item.boid === cleanBoid)) {
       toast.error('This BOID is already in your list.');
       return;
@@ -93,7 +101,7 @@ export default function IPOChecker() {
     setNewName('');
     setNewBoid('');
     setIsAddingBoid(false);
-    toast.success('BOID added to family list!');
+    toast.success('Valid BOID added to family list!');
   };
 
   // Remove BOID
