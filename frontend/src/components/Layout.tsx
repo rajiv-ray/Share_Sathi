@@ -1,7 +1,8 @@
+// frontend/src/components/Layout.tsx
 import { useState } from 'react';
 import { Outlet, NavLink, useNavigate } from 'react-router-dom';
 import { 
-  LayoutDashboard, Building2, BrainCircuit, 
+  LayoutDashboard, Building2, Bot, TrendingUp, 
   LogOut, Menu, X, Activity 
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
@@ -19,7 +20,8 @@ export default function Layout() {
   const navItems = [
     { name: 'Portfolio', path: '/', icon: LayoutDashboard },
     { name: 'IPO Hub', path: '/ipo', icon: Building2 },
-    { name: 'AI Analytics', path: '/analytics', icon: BrainCircuit },
+    { name: 'Portfolio & News AI', path: '/portfolio-advisor', icon: Bot },
+    { name: 'ML Stock Forecaster', path: '/stock-forecaster', icon: TrendingUp },
   ];
 
   return (
@@ -47,7 +49,7 @@ export default function Layout() {
         {/* Desktop Logo */}
         <div className="hidden lg:flex items-center h-16 px-6 border-b border-gray-100">
           <Activity className="w-6 h-6 mr-2 text-blue-600" />
-          <span className="text-xl font-bold text-gray-900">Share Sathi</span>
+          <span className="text-xl font-bold text-gray-900">ShareSathi</span>
         </div>
 
         {/* Navigation Links */}
